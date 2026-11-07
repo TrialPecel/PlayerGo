@@ -77,6 +77,7 @@ import org.schabi.newpipe.extractor.NewPipe;
 import org.schabi.newpipe.extractor.comments.CommentsInfoItem;
 import org.schabi.newpipe.extractor.exceptions.ContentNotSupportedException;
 import org.schabi.newpipe.extractor.exceptions.ExtractionException;
+import org.schabi.newpipe.extractor.services.youtube.ItagItem;
 import org.schabi.newpipe.extractor.stream.AudioStream;
 import org.schabi.newpipe.extractor.stream.Stream;
 import org.schabi.newpipe.extractor.stream.StreamInfo;
@@ -128,6 +129,8 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
+
+import us.shandian.giga.util.Utility;
 
 import coil3.util.CoilUtils;
 import io.reactivex.rxjava3.android.schedulers.AndroidSchedulers;
@@ -209,6 +212,11 @@ public final class VideoDetailFragment
 
     @Nullable
     private StreamInfo currentInfo = null;
+    /** Resolution (e.g. "480p") picked in the quality dialog for the stream about to be played. */
+    @Nullable
+    private String chosenPlaybackQuality = null;
+    @Nullable
+    private AlertDialog playbackQualityDialog = null;
     private Disposable currentWorker;
     @NonNull
     private final CompositeDisposable disposables = new CompositeDisposable();
@@ -835,6 +843,7 @@ public final class VideoDetailFragment
 
         initTabs();
         currentInfo = null;
+        chosenPlaybackQuality = null;
         if (currentWorker != null) {
             currentWorker.dispose();
         }
@@ -1111,6 +1120,11 @@ public final class VideoDetailFragment
      *                                       in landscape and screen orientation is locked
      */
     public void openVideoPlayer(final boolean directlyFullscreenIfApplicable) {
+        if (needsPlaybackQualityChoice()) {
+            showPlaybackQualityDialog(() -> openVideoPlayer(directlyFullscreenIfApplicable));
+            return;
+        }
+
         if (directlyFullscreenIfApplicable
                 && !DeviceUtils.isLandscape(requireContext())
                 && PlayerHelper.globalScreenOrientationLocked(requireContext())) {
@@ -1193,7 +1207,12 @@ public final class VideoDetailFragment
                                 PlayerIntentType.AllOthers)
                         .putExtra(Player.PLAY_WHEN_READY, autoPlayEnabled)
                         .putExtra(Player.RESUME_PLAYBACK, true);
+        if (chosenPlaybackQuality != null) {
+            playerIntent.putExtra(Player.PLAYBACK_QUALITY, chosenPlaybackQuality);
+        }
         ContextCompat.startForegroundService(activity, playerIntent);
+        // the choice only applies to this playback; ask again next time the user presses play
+        chosenPlaybackQuality = null;
     }
 
     /**
@@ -2177,6 +2196,116 @@ public final class VideoDetailFragment
                     onAllow.run();
                     dialog.dismiss();
                 })
+                .show();
+    }
+
+    /*//////////////////////////////////////////////////////////////////////////
+    // Quality + data usage dialog (shown before the main player starts)
+    //////////////////////////////////////////////////////////////////////////*/
+
+    /**
+     * @return the video streams in the same order and selection the main player uses, so that the
+     * resolution picked in the dialog maps 1:1 to what the player will play.
+     */
+    @NonNull
+    private List<VideoStream> getSelectableVideoStreams(@NonNull final StreamInfo info) {
+        return ListHelper.getSortedStreamVideosList(activity,
+                ListHelper.getPlayableStreams(info.getVideoStreams(), info.getServiceId()),
+                ListHelper.getPlayableStreams(info.getVideoOnlyStreams(), info.getServiceId()),
+                false, true);
+    }
+
+    private boolean needsPlaybackQualityChoice() {
+        if (currentInfo == null
+                || activity == null
+                || chosenPlaybackQuality != null
+                || playbackQualityDialog != null) {
+            return false;
+        }
+        if (PreferenceManager.getDefaultSharedPreferences(activity)
+                .getBoolean(getString(R.string.use_external_video_player_key), false)) {
+            return false; // external players have their own quality dialog
+        }
+        if (StreamTypeUtil.isLiveStream(currentInfo.getStreamType())) {
+            return false; // live streams have no fixed size
+        }
+        return !getSelectableVideoStreams(currentInfo).isEmpty();
+    }
+
+    /**
+     * Estimated download size in bytes of the given video stream (plus the audio stream that has to
+     * be loaded with it when the video is video-only), or {@code -1} if it cannot be estimated.
+     */
+    private long estimateStreamSizeBytes(@NonNull final VideoStream video,
+                                         @Nullable final AudioStream audio,
+                                         final long durationSeconds) {
+        final long videoSize = estimateSingleSizeBytes(video.getItagItem(), video.getBitrate(),
+                durationSeconds);
+        if (videoSize <= 0) {
+            return -1;
+        }
+        if (!video.isVideoOnly() || audio == null) {
+            return videoSize;
+        }
+        final long audioSize = estimateSingleSizeBytes(audio.getItagItem(),
+                audio.getAverageBitrate(), durationSeconds);
+        return audioSize > 0 ? videoSize + audioSize : videoSize;
+    }
+
+    private long estimateSingleSizeBytes(@Nullable final ItagItem itag,
+                                         final int bitrateBitsPerSecond,
+                                         final long durationSeconds) {
+        if (itag != null && itag.getContentLength() > 0) {
+            return itag.getContentLength();
+        }
+        final int bitrate = (itag != null && itag.getBitrate() > 0)
+                ? itag.getBitrate() : bitrateBitsPerSecond;
+        if (bitrate > 0 && durationSeconds > 0) {
+            return bitrate * durationSeconds / 8;
+        }
+        return -1;
+    }
+
+    private void showPlaybackQualityDialog(@NonNull final Runnable onQualityChosen) {
+        final StreamInfo info = currentInfo;
+        if (info == null) {
+            return;
+        }
+
+        final List<VideoStream> videoStreams = getSelectableVideoStreams(info);
+        final List<AudioStream> audioStreams = ListHelper.getFilteredAudioStreams(activity,
+                getUrlAndNonTorrentStreams(info.getAudioStreams()));
+        final AudioStream audio = audioStreams.isEmpty() ? null
+                : audioStreams.get(ListHelper.getDefaultAudioFormat(activity, audioStreams));
+
+        final CharSequence[] labels = new CharSequence[videoStreams.size()];
+        for (int i = 0; i < labels.length; i++) {
+            final VideoStream stream = videoStreams.get(i);
+            final long size = estimateStreamSizeBytes(stream, audio, info.getDuration());
+            final String sizeText = size > 0
+                    ? "~" + Utility.formatBytes(size)
+                    : getString(R.string.playback_quality_size_unknown);
+            labels[i] = stream.getResolution() + "  \u2022  " + sizeText;
+        }
+
+        final int defaultIndex = ListHelper.getDefaultResolutionIndex(activity, videoStreams);
+
+        playbackQualityDialog = new AlertDialog.Builder(activity)
+                .setTitle(R.string.playback_quality_dialog_title)
+                .setSingleChoiceItems(labels, defaultIndex, null)
+                .setNegativeButton(R.string.cancel, null)
+                .setPositiveButton(R.string.playback_quality_play, (dialog, which) -> {
+                    final int index = ((AlertDialog) dialog).getListView()
+                            .getCheckedItemPosition();
+                    if (index >= 0 && index < videoStreams.size()) {
+                        chosenPlaybackQuality = videoStreams.get(index).getResolution();
+                    } else if (defaultIndex >= 0 && defaultIndex < videoStreams.size()) {
+                        chosenPlaybackQuality = videoStreams.get(defaultIndex).getResolution();
+                    }
+                    playbackQualityDialog = null;
+                    onQualityChosen.run();
+                })
+                .setOnDismissListener(d -> playbackQualityDialog = null)
                 .show();
     }
 
