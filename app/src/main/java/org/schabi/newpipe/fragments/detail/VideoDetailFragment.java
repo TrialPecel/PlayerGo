@@ -2203,10 +2203,8 @@ public final class VideoDetailFragment
     // Quality + data usage dialog (shown before the main player starts)
     //////////////////////////////////////////////////////////////////////////*/
 
-    /**
-     * @return the video streams in the same order and selection the main player uses, so that the
-     * resolution picked in the dialog maps 1:1 to what the player will play.
-     */
+    // Returns the video streams in the same order and selection the main player uses, so that the
+    // resolution picked in the dialog maps 1:1 to what the player will play.
     @NonNull
     private List<VideoStream> getSelectableVideoStreams(@NonNull final StreamInfo info) {
         return ListHelper.getSortedStreamVideosList(activity,
@@ -2232,10 +2230,8 @@ public final class VideoDetailFragment
         return !getSelectableVideoStreams(currentInfo).isEmpty();
     }
 
-    /**
-     * Estimated download size in bytes of the given video stream (plus the audio stream that has to
-     * be loaded with it when the video is video-only), or {@code -1} if it cannot be estimated.
-     */
+    // Estimated download size in bytes of the given video stream (plus the audio stream that has
+    // to be loaded with it when the video is video-only), or -1 if it cannot be estimated.
     private long estimateStreamSizeBytes(@NonNull final VideoStream video,
                                          @Nullable final AudioStream audio,
                                          final long durationSeconds) {
