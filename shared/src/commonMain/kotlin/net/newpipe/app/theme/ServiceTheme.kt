@@ -19,12 +19,12 @@ import net.newpipe.app.Constants.KEY_STREAMING_SERVICE
 import org.koin.compose.koinInject
 
 val youTubeLightScheme = lightColorScheme(
-    primaryContainer = Color(0xFF6A35C9),
+    primaryContainer = Color(0xFF4A238F),
     onPrimaryContainer = Color(0xFFFFFFFF)
 )
 
 val youTubeDarkScheme = darkColorScheme(
-    primaryContainer = Color(0xFF2E1559),
+    primaryContainer = Color(0xFF1C0A38),
     onPrimaryContainer = Color(0xFFFFFFFF)
 )
 
